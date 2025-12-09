@@ -1,0 +1,23 @@
+{
+  "name": "lovep-tg",
+  "version": "1.0.0",
+  "description": "MuseBot - a romantic Telegram bot for couples",
+  "license": "ISC",
+  "author": "kun3741",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "backup": "node database/backup.js",
+    "backup:archive": "node database/backupToArchive.js",
+    "restore": "node database/restore.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "mongoose": "^8.0.3",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  }
+}

@@ -1,0 +1,344 @@
+const menuService = require('../services/menuService');
+const cartService = require('../services/cartService');
+const Keyboards = require('../helpers/keyboards');
+const Messages = require('../helpers/messages');
+
+class MenuHandlers {
+    constructor(bot) {
+        this.bot = bot;
+        this.userStates = new Map(); // Зберігаємо стан користувача
+        this.userMessages = new Map(); // Зберігаємо message_id для редагування
+    }
+
+    // Допоміжний метод для редагування або відправки повідомлення
+    async editOrSendMessage(bot, userId, message, text, keyboard = null) {
+        try {
+            if (message && message.message_id) {
+                try {
+                    await bot.editMessageText(text, {
+                        chat_id: userId,
+                        message_id: message.message_id,
+                        ...keyboard,
+                        parse_mode: keyboard ? 'Markdown' : undefined
+                    });
+                    this.userMessages.set(userId, message.message_id);
+                    return;
+                } catch (error) {
+                    // Якщо повідомлення містить медіа або не може бути відредаговане - видаляємо і надсилаємо нове
+                    if (error.response && error.response.body && error.response.body.description) {
+                        const errorDesc = error.response.body.description;
+                        // Якщо помилка "message can't be edited" або повідомлення містить медіа
+                        if (errorDesc.includes("can't be edited") || errorDesc.includes("message is not modified")) {
+                            try {
+                                // Видаляємо старе повідомлення
+                                await bot.deleteMessage(userId, message.message_id);
+                            } catch (deleteError) {
+                                // Ігноруємо помилки видалення
+                            }
+                        } else if (errorDesc.includes('not modified')) {
+                            // Якщо текст не змінився, просто виходимо
+                            return;
+                        }
+                    }
+                }
+            }
+            const sent = await bot.sendMessage(userId, text, {
+                ...keyboard,
+                parse_mode: keyboard ? 'Markdown' : undefined
+            });
+            this.userMessages.set(userId, sent.message_id);
+        } catch (error) {
+            console.error('Error in editOrSendMessage:', error);
+            const sent = await bot.sendMessage(userId, text, {
+                ...keyboard,
+                parse_mode: keyboard ? 'Markdown' : undefined
+            });
+            this.userMessages.set(userId, sent.message_id);
+        }
+    }
+
+    // Допоміжний метод для редагування медіа
+    async editOrSendMedia(bot, userId, message, mediaType, fileId, caption, keyboard = null) {
+        try {
+            if (message && message.message_id) {
+                try {
+                    if (mediaType === 'video') {
+                        await bot.editMessageMedia({
+                            type: 'video',
+                            media: fileId,
+                            caption: caption,
+                            parse_mode: 'Markdown'
+                        }, {
+                            chat_id: userId,
+                            message_id: message.message_id,
+                            ...keyboard
+                        });
+                    } else if (mediaType === 'animation') {
+                        await bot.editMessageMedia({
+                            type: 'animation',
+                            media: fileId,
+                            caption: caption,
+                            parse_mode: 'Markdown'
+                        }, {
+                            chat_id: userId,
+                            message_id: message.message_id,
+                            ...keyboard
+                        });
+                    } else {
+                        await bot.editMessageMedia({
+                            type: 'photo',
+                            media: fileId,
+                            caption: caption,
+                            parse_mode: 'Markdown'
+                        }, {
+                            chat_id: userId,
+                            message_id: message.message_id,
+                            ...keyboard
+                        });
+                    }
+                    return;
+                } catch (error) {
+                    // Якщо не вдалося відредагувати, видаляємо старе і надсилаємо нове
+                    if (error.response && error.response.body && error.response.body.description) {
+                        const errorDesc = error.response.body.description;
+                        if (errorDesc.includes("can't be edited") || errorDesc.includes("not modified")) {
+                            try {
+                                // Видаляємо старе повідомлення
+                                await bot.deleteMessage(userId, message.message_id);
+                            } catch (deleteError) {
+                                // Ігноруємо помилки видалення
+                            }
+                        }
+                    }
+                }
+            }
+            if (mediaType === 'video') {
+                const sent = await bot.sendVideo(userId, fileId, {
+                    caption: caption,
+                    ...keyboard,
+                    parse_mode: 'Markdown'
+                });
+                this.userMessages.set(userId, sent.message_id);
+            } else if (mediaType === 'animation') {
+                const sent = await bot.sendAnimation(userId, fileId, {
+                    caption: caption,
+                    ...keyboard,
+                    parse_mode: 'Markdown'
+                });
+                this.userMessages.set(userId, sent.message_id);
+            } else {
+                const sent = await bot.sendPhoto(userId, fileId, {
+                    caption: caption,
+                    ...keyboard,
+                    parse_mode: 'Markdown'
+                });
+                this.userMessages.set(userId, sent.message_id);
+            }
+        } catch (error) {
+            console.error('Error in editOrSendMedia:', error);
+        }
+    }
+
+    // Обробка вибору категорії
+    async handleCategory(bot, msg, categoryName, message = null) {
+        const userId = msg.from.id;
+        const categories = await menuService.getCategories();
+        const category = categories.find(c => c.name === categoryName);
+        
+        if (!category) {
+            return this.editOrSendMessage(bot, userId, message, 'Категорія не знайдена');
+        }
+
+        const subcategories = await menuService.getSubcategories(category._id);
+        const keyboard = await Keyboards.getSubcategoriesKeyboard(category._id);
+        
+        let text = `*${category.emoji} ${category.name}*\n\n`;
+        text += 'Оберіть підкатегорію:';
+        
+        await this.editOrSendMessage(bot, userId, message, text, keyboard);
+        
+        // Зберігаємо поточну категорію
+        this.userStates.set(userId, { categoryId: category._id });
+    }
+
+    // Обробка вибору підкатегорії
+    async handleSubcategory(bot, msg, subcategoryName, message = null) {
+        const userId = msg.from.id;
+        const state = this.userStates.get(userId) || {};
+        const categoryId = state.categoryId;
+        
+        if (!categoryId) {
+            return this.editOrSendMessage(bot, userId, message, 'Спочатку оберіть категорію');
+        }
+
+        const subcategories = await menuService.getSubcategories(categoryId);
+        const subcategory = subcategories.find(s => s.name === subcategoryName);
+        
+        if (!subcategory) {
+            return this.editOrSendMessage(bot, userId, message, 'Підкатегорія не знайдена');
+        }
+
+        // Якщо це кастомна підкатегорія
+        if (subcategory.is_custom) {
+            this.userStates.set(userId, { 
+                categoryId, 
+                subcategoryId: subcategory._id,
+                waitingForCustomText: true 
+            });
+            return this.editOrSendMessage(bot, userId, message, 
+                '💬 Напиши свій варіант замовлення:',
+                Keyboards.getCancelKeyboard('cancel_form')
+            );
+        }
+
+        // Отримуємо товари
+        const items = await menuService.getItemsBySubcategory(subcategory._id);
+        
+        const prevMessage = this.userMessages.get(userId) ? { message_id: this.userMessages.get(userId) } : null;
+        
+        if (items.length === 0) {
+            return this.editOrSendMessage(bot, userId, prevMessage, 
+                '😔 Товарів у цій підкатегорії поки немає',
+                Keyboards.getBackToMenuKeyboard()
+            );
+        }
+
+        // Якщо товар один - показуємо картку
+        if (items.length === 1) {
+            const item = items[0];
+            const text = Messages.formatItemCard(item);
+            const isRandomDate = item.title === 'Рандомное для нас двоих';
+            const keyboard = Keyboards.getItemKeyboard(item._id, isRandomDate);
+            
+            const prevMessage = this.userMessages.get(userId) ? { message_id: this.userMessages.get(userId) } : null;
+            
+            if (item.video_id) {
+                await this.editOrSendMedia(bot, userId, prevMessage, 'video', item.video_id, text, keyboard);
+            } else if (item.photo_id) {
+                // Для гіфок використовуємо sendAnimation, для фото - sendPhoto
+                if (item.media_type === 'gif') {
+                    await this.editOrSendMedia(bot, userId, prevMessage, 'animation', item.photo_id, text, keyboard);
+                } else {
+                    await this.editOrSendMedia(bot, userId, prevMessage, 'photo', item.photo_id, text, keyboard);
+                }
+            } else {
+                await this.editOrSendMessage(bot, userId, prevMessage, text, keyboard);
+            }
+            return;
+        }
+
+        // Якщо товарів багато - показуємо галерею
+        this.userStates.set(userId, {
+            categoryId,
+            subcategoryId: subcategory._id,
+            galleryItems: items,
+            galleryIndex: 0
+        });
+
+        await this.showGalleryItem(bot, userId, 0);
+    }
+
+    // Показати елемент галереї
+    async showGalleryItem(bot, userId, index, message = null) {
+        const state = this.userStates.get(userId);
+        if (!state || !state.galleryItems) return;
+
+        const items = state.galleryItems;
+        if (index < 0 || index >= items.length) return;
+
+        const item = items[index];
+        const text = Messages.formatItemCard(item);
+        const isRandomDate = item.title === 'Рандомное для нас двоих';
+        const keyboard = isRandomDate 
+            ? Keyboards.getItemKeyboard(item._id, true)
+            : Keyboards.getGalleryKeyboard(index, items.length, item._id);
+
+        state.galleryIndex = index;
+        this.userStates.set(userId, state);
+
+        // Використовуємо message з попереднього повідомлення або збережене
+        const prevMessage = message || (this.userMessages.get(userId) ? { message_id: this.userMessages.get(userId) } : null);
+
+        if (item.video_id) {
+            await this.editOrSendMedia(bot, userId, prevMessage, 'video', item.video_id, text, keyboard);
+        } else if (item.photo_id) {
+            // Для гіфок використовуємо sendAnimation, для фото - sendPhoto
+            if (item.media_type === 'gif') {
+                await this.editOrSendMedia(bot, userId, prevMessage, 'animation', item.photo_id, text, keyboard);
+            } else {
+                await this.editOrSendMedia(bot, userId, prevMessage, 'photo', item.photo_id, text, keyboard);
+            }
+        } else {
+            await this.editOrSendMessage(bot, userId, prevMessage, text, keyboard);
+        }
+    }
+
+    // Обробка кастомного тексту
+    async handleCustomText(bot, msg) {
+        const userId = msg.from.id;
+        const state = this.userStates.get(userId);
+        
+        if (!state || !state.waitingForCustomText) {
+            return;
+        }
+
+        const customText = msg.text;
+        if (!customText || customText.trim().length === 0) {
+            const messageId = this.userMessages.get(userId);
+            const message = messageId ? { message_id: messageId } : null;
+            return this.editOrSendMessage(bot, userId, message, 'Будь ласка, введіть текст замовлення');
+        }
+
+        // Створюємо тимчасовий товар у кошику
+        // Для кастомних товарів item_id може бути null
+        // Передаємо categoryId для встановлення правильної ціни
+        const categoryId = state.categoryId || null;
+        await cartService.addToCart(userId, null, customText.trim(), categoryId);
+        
+        this.userStates.delete(userId);
+        
+        const messageId = this.userMessages.get(userId);
+        const message = messageId ? { message_id: messageId } : null;
+        
+        await this.editOrSendMessage(bot, userId, message, 
+            '✅ Замовлення додано в кошик!',
+            Keyboards.getMainMenu()
+        );
+    }
+
+    // Обробка кошика
+    async handleCart(bot, msg, message = null) {
+        const userId = msg.from.id;
+        const cartText = await Messages.formatCart(userId);
+        const items = await cartService.getCartItems(userId);
+        const keyboard = Keyboards.getCartKeyboard(items);
+        
+        await this.editOrSendMessage(bot, userId, message, cartText, keyboard);
+    }
+
+    // Обробка рахунку
+    async handleAccount(bot, msg, message = null) {
+        const userId = msg.from.id;
+        const accountText = await Messages.formatAccount(userId);
+        const keyboard = Keyboards.getAccountKeyboard();
+        
+        await this.editOrSendMessage(bot, userId, message, accountText, keyboard);
+    }
+
+    // Очистити стан користувача
+    clearUserState(userId) {
+        this.userStates.delete(userId);
+    }
+
+    // Отримати стан користувача
+    getUserState(userId) {
+        return this.userStates.get(userId);
+    }
+
+    // Встановити стан користувача
+    setUserState(userId, state) {
+        this.userStates.set(userId, state);
+    }
+}
+
+module.exports = MenuHandlers;

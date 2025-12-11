@@ -671,10 +671,14 @@ class CallbackHandlers {
         const user = await User.findOne({ user_id: userId });
         const username = user ? (user.username ? `@${user.username}` : `ID: ${userId}`) : `ID: ${userId}`;
         
-        // Адмін-нотифікація без Markdown, щоб не псувати дати й текст
+        // Адмін-нотифікація у форматі звичайного замовлення (plain text)
+        const dateMatch = comment && comment.match(/\d{1,2}\.\d{1,2}\.\d{4}/);
+        const dateText = dateMatch ? dateMatch[0] : 'Не вказано';
         const adminMessage = `📸 Нове замовлення зі спецменю\n\n` +
             `👤 Користувач: ${username}\n` +
-            `💬 Коментар: ${comment || '(без коментаря)'}`;
+            `📅 Дата: ${dateText}\n` +
+            `💬 Коментар: ${comment || '(без коментаря)'}\n` +
+            `🧺 Позиції:\n1. Спецменю (активне)`;
         
         for (const adminId of adminUserIds) {
             try {

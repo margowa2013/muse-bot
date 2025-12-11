@@ -6,6 +6,7 @@ const Keyboards = require('../helpers/keyboards');
 const Messages = require('../helpers/messages');
 const { getPartnerId, isCoupleUser } = require('../config/constants');
 const { safeAnswerCallbackQuery } = require('../helpers/callbackHelper');
+const User = require('../models/User');
 
 class CallbackHandlers {
     constructor(bot, menuHandlers) {
@@ -433,6 +434,50 @@ class CallbackHandlers {
                     ...Keyboards.getMainMenu()
                 });
                 this.menuHandlers.userMessages.set(userId, sent.message_id);
+            }
+
+            // Надсилаємо повідомлення адміністратору про звичайне замовлення
+            try {
+                const adminIdsRaw = process.env.ADMIN_USER_ID || '';
+                const adminUserIds = adminIdsRaw
+                    .split(',')
+                    .map(id => parseInt(id.trim()))
+                    .filter(id => !isNaN(id) && id > 0);
+
+                if (adminUserIds.length > 0) {
+                    const user = await User.findOne({ user_id: userId });
+                    const username = user ? (user.username ? `@${user.username}` : `ID: ${userId}`) : `ID: ${userId}`;
+                    const escapeMarkdown = (text) => {
+                        if (!text) return text;
+                        return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+                    };
+
+                    const itemsList = orderItems.length
+                        ? orderItems.map((i, idx) => `${idx + 1}. ${escapeMarkdown(i.title)}`).join('\n')
+                        : '—';
+
+                    const adminMessage = `🛒 *Нове замовлення*\n` +
+                        `👤 Користувач: ${escapeMarkdown(username)}\n` +
+                        `📅 Дата: ${parsedDate ? new Date(parsedDate).toLocaleDateString('uk-UA') : '—'}\n` +
+                        `💬 Коментар: ${escapeMarkdown(comment || '(без коментаря)')}\n` +
+                        `🧺 Позиції:\n${itemsList}`;
+
+                    for (const adminId of adminUserIds) {
+                        try {
+                            await this.bot.sendMessage(adminId, adminMessage, { parse_mode: 'Markdown' });
+                        } catch (err) {
+                            // fallback без Markdown
+                            const plain = `🛒 Нове замовлення\n` +
+                                `👤 Користувач: ${username}\n` +
+                                `📅 Дата: ${parsedDate ? new Date(parsedDate).toLocaleDateString('uk-UA') : '—'}\n` +
+                                `💬 Коментар: ${comment || '(без коментаря)'}\n` +
+                                `🧺 Позиції:\n${orderItems.length ? orderItems.map((i, idx) => `${idx + 1}. ${i.title}`).join('\n') : '—'}`;
+                            await this.bot.sendMessage(adminId, plain);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('Помилка відправки замовлення адміну:', err);
             }
 
             // Відправляємо повідомлення партнеру

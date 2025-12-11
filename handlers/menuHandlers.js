@@ -183,6 +183,11 @@ class MenuHandlers {
             } catch (errSend) {
                 const desc = errSend?.response?.body?.description || '';
                 const badFile = desc.includes('wrong file identifier') || desc.includes('FILE_REFERENCE_');
+                console.warn('⚠️ [MEDIA] send failed, will retry if local exists', {
+                    itemId: item._id.toString(),
+                    title: item.title,
+                    desc
+                });
                 // Якщо ще раз упало через file_id, пробуємо локальний файл (якщо ще не пробували)
                 if (!usedLocalPath && fallbackLocalPath && fs.existsSync(fallbackLocalPath)) {
                     try {
@@ -206,6 +211,13 @@ class MenuHandlers {
 
             if (fileId) {
                 const mediaTypeToStore = mediaType === 'animation' ? 'animation' : mediaType;
+                console.log('📷 [MEDIA] Cached file_id', {
+                    itemId: item._id.toString(),
+                    title: item.title,
+                    mediaType: mediaTypeToStore,
+                    fileId,
+                    localPath: usedLocalPath || localPathCandidate || null,
+                });
                 this.mediaCache.set(item._id.toString(), { mediaType: mediaTypeToStore, fileId });
 
                 const update = {};
@@ -224,6 +236,13 @@ class MenuHandlers {
                 } catch (e) {
                     console.error('Failed to persist media file_id:', e.message);
                 }
+            } else {
+                console.warn('⚠️ [MEDIA] No file_id returned after send', {
+                    itemId: item._id.toString(),
+                    title: item.title,
+                    mediaType,
+                    localPath: usedLocalPath || localPathCandidate || null,
+                });
             }
 
             this.userMessages.set(userId, sent.message_id);
@@ -370,6 +389,10 @@ class MenuHandlers {
                 keyboard
             );
         } else {
+            console.warn('⚠️ [MEDIA] No media payload found for item', {
+                itemId: item._id.toString(),
+                title: item.title
+            });
             await this.editOrSendMessage(bot, userId, prevMessage, text, keyboard);
         }
     }

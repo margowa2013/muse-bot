@@ -787,10 +787,11 @@ class AdminHandlers {
         console.log('🔍 [DEBUG] Обробка вибору користувача для віднімання боргу');
         console.log('🔍 [DEBUG] targetUserId:', targetUserId);
         
-        const state = this.adminStates.get(userId);
+        let state = this.adminStates.get(userId);
         if (!state) {
-            console.error('❌ [ERROR] Стан адміна не знайдено');
-            return;
+            // Якщо викликали напряму з картки замовлення – ініціалізуємо мінімальний стан
+            state = { step: 'pay_debt_user' };
+            this.adminStates.set(userId, state);
         }
         
         // Отримуємо інформацію про користувача

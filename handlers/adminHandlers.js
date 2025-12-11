@@ -207,6 +207,14 @@ class AdminHandlers {
             } else if (data === 'admin_orders') {
                 await this.showOrders(bot, userId, query.message);
                 await safeAnswerCallbackQuery(bot, query.id);
+            } else if (data.startsWith('admin_order_') && !data.startsWith('admin_order_pay_')) {
+                const orderId = data.replace('admin_order_', '');
+                await this.showOrderDetails(bot, userId, orderId, query.message);
+                await safeAnswerCallbackQuery(bot, query.id);
+            } else if (data.startsWith('admin_order_pay_')) {
+                const targetUserId = parseInt(data.replace('admin_order_pay_', ''));
+                await this.handleSelectUserForDebt(bot, userId, targetUserId, query.message);
+                await safeAnswerCallbackQuery(bot, query.id);
             } else if (data === 'admin_pay_debt') {
                 await this.startPayDebt(bot, userId, query.message);
                 await safeAnswerCallbackQuery(bot, query.id);
@@ -644,15 +652,83 @@ class AdminHandlers {
 
         let text = '📋 *Список замовлень:*\n\n';
         
+        const buttons = [];
         orders.forEach((order, index) => {
+            const userLabel = order.first_name || order.username
+                ? `${order.first_name || ''} ${order.username ? '@' + order.username : ''}`.trim()
+                : `ID: ${order.user_id || 'Невідомо'}`;
             text += `${index + 1}. Замовлення #${order.id}\n`;
-            text += `   Користувач: ${order.first_name || order.username || 'Невідомо'}\n`;
-            text += `   Дата: ${order.date_requested || 'Не вказано'}\n`;
+            text += `   Користувач: ${userLabel}\n`;
+            text += `   Дата: ${order.date_requested ? new Date(order.date_requested).toLocaleDateString('uk-UA') : 'Не вказано'}\n`;
             text += `   Позицій: ${order.items_count}\n`;
+            text += `   Коментар: ${order.comment || '—'}\n`;
             text += `   Статус: ${order.status}\n\n`;
+
+            buttons.push([{
+                text: `🔍 #${order.id} (${order.items_count})`,
+                callback_data: `admin_order_${order.id}`
+            }]);
         });
 
-        await this.editOrSendMessage(bot, userId, message, text, Keyboards.getAdminKeyboard());
+        buttons.push([{ text: '⬅️ В адмін-меню', callback_data: 'admin_cancel' }]);
+
+        const keyboard = {
+            reply_markup: {
+                inline_keyboard: buttons
+            }
+        };
+
+        await this.editOrSendMessage(bot, userId, message, text, keyboard);
+    }
+
+    async showOrderDetails(bot, userId, orderId, message = null) {
+        const details = await adminService.getOrderDetails(orderId);
+        if (!details) {
+            return this.editOrSendMessage(bot, userId, message, '❌ Замовлення не знайдено', Keyboards.getAdminKeyboard());
+        }
+
+        const { order, items } = details;
+        const userLabel = order.first_name || order.username
+            ? `${order.first_name || ''} ${order.username ? '@' + order.username : ''}`.trim()
+            : `ID: ${order.user_id || 'Невідомо'}`;
+
+        let text = `🧾 *Замовлення #${order.id}*\n`;
+        text += `👤 Користувач: ${userLabel}\n`;
+        text += `📅 Дата: ${order.date_requested ? new Date(order.date_requested).toLocaleDateString('uk-UA') : 'Не вказано'}\n`;
+        text += `💬 Коментар: ${order.comment || '—'}\n`;
+        text += `📌 Статус: ${order.status}\n`;
+        text += `🧺 Позицій: ${items.length}\n\n`;
+
+        if (items.length === 0) {
+            text += '— Позиції відсутні\n';
+        } else {
+            items.forEach((it, idx) => {
+                const pricePart = it.price_amount
+                    ? `${it.price_amount} ${it.currency_emoji || ''} ${it.currency_name || ''}`.trim()
+                    : '—';
+                text += `${idx + 1}. ${it.title || it.custom_text || 'Без назви'}\n`;
+                text += `   Ціна: ${pricePart}\n`;
+                if (it.custom_text) {
+                    text += `   Коментар до позиції: ${it.custom_text}\n`;
+                }
+            });
+        }
+
+        const buttons = [
+            [{ text: '⬅️ До списку замовлень', callback_data: 'admin_orders' }],
+        ];
+
+        if (order.user_id) {
+            buttons.unshift([{ text: '💰 Відняти борг', callback_data: `admin_order_pay_${order.user_id}` }]);
+        }
+
+        const keyboard = {
+            reply_markup: {
+                inline_keyboard: buttons
+            }
+        };
+
+        await this.editOrSendMessage(bot, userId, message, text, keyboard);
     }
 
     async startPayDebt(bot, userId, message = null) {

@@ -28,7 +28,7 @@ class MenuHandlers {
         const localPath = getLocalMediaPath(item.title);
         if (localPath && fs.existsSync(localPath)) {
             // Використовуємо стрім, щоб Telegram отримав multipart із файлом
-            return { mediaType, media: fs.createReadStream(localPath), local: true };
+            return { mediaType, media: fs.createReadStream(localPath), local: true, localPath };
         }
 
         if (item.video_id) {
@@ -96,7 +96,7 @@ class MenuHandlers {
 
     // Допоміжний метод для редагування медіа
     async editOrSendMedia(bot, userId, message, item, mediaPayload, caption, keyboard = null) {
-        const { mediaType, media, local, cached } = mediaPayload;
+        const { mediaType, media, local, cached, localPath } = mediaPayload;
         const canEdit = message && message.message_id && !local;
 
         try {
@@ -165,6 +165,9 @@ class MenuHandlers {
                     } else {
                         update.photo_id = fileId;
                         update.media_type = mediaType === 'animation' ? 'gif' : 'photo';
+                        if (localPath) {
+                            update.photo_url = localPath; // зберігаємо відносний шлях до локального файлу
+                        }
                     }
                     try {
                         await Item.updateOne({ _id: item._id }, { $set: update });

@@ -5,7 +5,17 @@ const userService = require('./userService');
 class OrderService {
     // Функція для парсингу дати з тексту
     parseDate(dateString) {
-        if (!dateString || typeof dateString !== 'string') {
+        if (!dateString) return null;
+
+        // Якщо це вже Date або timestamp — повертаємо/конвертуємо
+        if (dateString instanceof Date) {
+            return isNaN(dateString.getTime()) ? null : dateString;
+        }
+        if (typeof dateString === 'number') {
+            const d = new Date(dateString);
+            return isNaN(d.getTime()) ? null : d;
+        }
+        if (typeof dateString !== 'string') {
             return null;
         }
 

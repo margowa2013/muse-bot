@@ -671,39 +671,25 @@ class CallbackHandlers {
         const user = await User.findOne({ user_id: userId });
         const username = user ? (user.username ? `@${user.username}` : `ID: ${userId}`) : `ID: ${userId}`;
         
-        // Екрануємо спеціальні символи Markdown для безпечного відображення
-        const escapeMarkdown = (text) => {
-            if (!text) return text;
-            return text.replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
-        };
-        
-        const adminMessage = `📸 *Нове замовлення зі спецменю*\n\n` +
-            `👤 Користувач: ${escapeMarkdown(username)}\n` +
-            `💬 Коментар: ${escapeMarkdown(comment || '(без коментаря)')}`;
+        // Адмін-нотифікація без Markdown, щоб не псувати дати й текст
+        const adminMessage = `📸 Нове замовлення зі спецменю\n\n` +
+            `👤 Користувач: ${username}\n` +
+            `💬 Коментар: ${comment || '(без коментаря)'}`;
         
         for (const adminId of adminUserIds) {
             try {
-                await this.bot.sendMessage(adminId, adminMessage, {
-                    parse_mode: 'Markdown'
-                });
+                await this.bot.sendMessage(adminId, adminMessage);
             } catch (error) {
                 console.error(`Помилка відправки повідомлення адміну ${adminId}:`, error);
-                // Якщо Markdown не працює, спробуємо без форматування
-                try {
-                    const plainMessage = `📸 Нове замовлення зі спецменю\n\n` +
-                        `👤 Користувач: ${username}\n` +
-                        `💬 Коментар: ${comment || '(без коментаря)'}`;
-                    await this.bot.sendMessage(adminId, plainMessage);
-                } catch (error2) {
-                    console.error(`Помилка відправки повідомлення адміну ${adminId} (без Markdown):`, error2);
-                }
             }
         }
 
-        // Відправляємо підтвердження користувачу з гіфкою
-        const confirmationGifUrl = 'https://photos.google.com/album/AF1QipNOWoeOyEZMVHFkpFBBbJlv8xaAVOUUi8N2Y6fr/photo/AF1QipMw5QYOmVNnI5InRHCyBIMHjmhJ3wlNSApKbUjo';
+        // Відправляємо підтвердження користувачу з гіфкою (тільки файл/file_id, без URL)
         const confirmationText = 'Спасибо за заказ, лучший мужчина в мире!\n\nОплата при получении 💋\n\nХорошего вам дня 😘';
-        
+        const localGifPath = path.join(__dirname, '..', 'src', 'giphy.gif');
+        const confirmationGifId = process.env.ORDER_CONFIRMATION_GIF_ID || null;
+        let gifSent = false;
+
         // Видаляємо попереднє повідомлення, якщо є
         if (message && message.message_id) {
             try {
@@ -712,13 +698,23 @@ class CallbackHandlers {
                 // Ігноруємо помилки видалення
             }
         }
-        
-        // Відправляємо гіфку з текстом підтвердження
-        // Спочатку спробуємо через file_id з .env (якщо гіфка вже завантажена)
-        const confirmationGifId = process.env.ORDER_CONFIRMATION_GIF_ID;
-        let gifSent = false;
-        
-        if (confirmationGifId) {
+
+        // 1) Локальний файл, якщо є
+        if (!gifSent && fs.existsSync(localGifPath)) {
+            try {
+                const sent = await this.bot.sendAnimation(userId, fs.createReadStream(localGifPath), {
+                    caption: confirmationText,
+                    ...Keyboards.getMainMenu()
+                });
+                this.menuHandlers.userMessages.set(userId, sent.message_id);
+                gifSent = true;
+            } catch (error) {
+                console.error('Помилка відправки локальної гіфки:', error);
+            }
+        }
+
+        // 2) file_id з .env, якщо є і не відправили локально
+        if (!gifSent && confirmationGifId) {
             try {
                 const sent = await this.bot.sendAnimation(userId, confirmationGifId, {
                     caption: confirmationText,
@@ -730,24 +726,13 @@ class CallbackHandlers {
                 console.error('Помилка відправки гіфки через file_id:', error);
             }
         }
-        
-        // Якщо гіфка не відправлена, відправляємо текст з посиланням
+
+        // 3) Якщо все впало — простий текст без лінків
         if (!gifSent) {
-            const textWithLink = `${confirmationText}\n\n🎞️ [Гіфка](${confirmationGifUrl})`;
-            try {
-                const sent = await this.bot.sendMessage(userId, textWithLink, {
-                    parse_mode: 'Markdown',
-                    ...Keyboards.getMainMenu()
-                });
-                this.menuHandlers.userMessages.set(userId, sent.message_id);
-            } catch (error) {
-                // Якщо Markdown не працює, відправляємо без форматування
-                const textWithLinkPlain = `${confirmationText}\n\n🎞️ Гіфка: ${confirmationGifUrl}`;
-                const sent = await this.bot.sendMessage(userId, textWithLinkPlain, {
-                    ...Keyboards.getMainMenu()
-                });
-                this.menuHandlers.userMessages.set(userId, sent.message_id);
-            }
+            const sent = await this.bot.sendMessage(userId, confirmationText, {
+                ...Keyboards.getMainMenu()
+            });
+            this.menuHandlers.userMessages.set(userId, sent.message_id);
         }
 
         this.userStates.delete(userId);

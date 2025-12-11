@@ -21,14 +21,15 @@ class MenuHandlers {
             : (item.media_type === 'gif' ? 'animation' : 'photo');
 
         const cached = this.mediaCache.get(item._id.toString());
+        const localPathCandidate = getLocalMediaPath(item.title);
         if (cached) {
-            return { mediaType: cached.mediaType, media: cached.fileId, cached: true };
+            return { mediaType: cached.mediaType, media: cached.fileId, cached: true, localPathCandidate };
         }
 
-        const localPath = getLocalMediaPath(item.title);
+        const localPath = localPathCandidate;
         if (localPath && fs.existsSync(localPath)) {
             // Використовуємо стрім, щоб Telegram отримав multipart із файлом
-            return { mediaType, media: fs.createReadStream(localPath), local: true, localPath };
+            return { mediaType, media: fs.createReadStream(localPath), local: true, localPath, localPathCandidate };
         }
 
         if (item.video_id) {
@@ -96,9 +97,9 @@ class MenuHandlers {
 
     // Допоміжний метод для редагування медіа
     async editOrSendMedia(bot, userId, message, item, mediaPayload, caption, keyboard = null) {
-        const { mediaType, media, local, cached, localPath } = mediaPayload;
+        const { mediaType, media, local, cached, localPath, localPathCandidate } = mediaPayload;
         const canEdit = message && message.message_id && !local;
-        const fallbackLocalPath = getLocalMediaPath(item.title);
+        const fallbackLocalPath = localPath || localPathCandidate;
 
         const trySend = async (source) => {
             if (mediaType === 'video') {
@@ -142,6 +143,10 @@ class MenuHandlers {
                     // Якщо file_id протух або неправильний — пробуємо відправити файл заново
                     if (!badFile) {
                         try { await bot.deleteMessage(userId, message.message_id); } catch (_) {}
+                    } else {
+                        // Протухлий file_id — очистимо кеш і будемо слати заново
+                        this.mediaCache.delete(item._id.toString());
+                        try { await bot.deleteMessage(userId, message.message_id); } catch (_) {}
                     }
                 }
             } else if (message && message.message_id && local) {
@@ -156,7 +161,26 @@ class MenuHandlers {
                 usedLocalPath = fallbackLocalPath;
             }
 
-            const sent = await trySend(source);
+            let sent;
+            try {
+                sent = await trySend(source);
+            } catch (errSend) {
+                const desc = errSend?.response?.body?.description || '';
+                const badFile = desc.includes('wrong file identifier') || desc.includes('FILE_REFERENCE_');
+                // Якщо ще раз упало через file_id, пробуємо локальний файл (якщо ще не пробували)
+                if (!usedLocalPath && fallbackLocalPath && fs.existsSync(fallbackLocalPath)) {
+                    try {
+                        sent = await trySend(fs.createReadStream(fallbackLocalPath));
+                        usedLocalPath = fallbackLocalPath;
+                    } catch (err2) {
+                        throw err2;
+                    }
+                } else if (!badFile) {
+                    throw errSend;
+                } else {
+                    throw errSend;
+                }
+            }
 
             // Кешуємо file_id для подальшого редагування
             let fileId = null;

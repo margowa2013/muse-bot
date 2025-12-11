@@ -1,13 +1,43 @@
+const fs = require('fs');
 const menuService = require('../services/menuService');
 const cartService = require('../services/cartService');
 const Keyboards = require('../helpers/keyboards');
 const Messages = require('../helpers/messages');
+const { getLocalMediaPath } = require('../config/localMediaMap');
 
 class MenuHandlers {
     constructor(bot) {
         this.bot = bot;
         this.userStates = new Map(); // Зберігаємо стан користувача
         this.userMessages = new Map(); // Зберігаємо message_id для редагування
+    }
+
+    // Визначає, що і як відправляти (локальний файл, file_id або URL)
+    getMediaPayload(item) {
+        const mediaType = item.media_type === 'video'
+            ? 'video'
+            : (item.media_type === 'gif' ? 'animation' : 'photo');
+
+        const localPath = getLocalMediaPath(item.title);
+        if (localPath && fs.existsSync(localPath)) {
+            // Використовуємо стрім, щоб Telegram отримав multipart із файлом
+            return { mediaType, media: fs.createReadStream(localPath) };
+        }
+
+        if (item.video_id) {
+            return { mediaType: 'video', media: item.video_id };
+        }
+
+        if (item.photo_id) {
+            const type = item.media_type === 'gif' ? 'animation' : 'photo';
+            return { mediaType: type, media: item.photo_id };
+        }
+
+        if (item.photo_url) {
+            return { mediaType, media: item.photo_url };
+        }
+
+        return null;
     }
 
     // Допоміжний метод для редагування або відправки повідомлення
@@ -58,14 +88,25 @@ class MenuHandlers {
     }
 
     // Допоміжний метод для редагування медіа
-    async editOrSendMedia(bot, userId, message, mediaType, fileId, caption, keyboard = null) {
+    async editOrSendMedia(bot, userId, message, mediaType, mediaSource, caption, keyboard = null) {
+        const isStream = mediaSource && typeof mediaSource === 'object' && typeof mediaSource.path === 'string';
         try {
-            if (message && message.message_id) {
+            // Якщо локальний файл (stream) — Telegram не дозволяє editMessageMedia з ним.
+            // Тому видаляємо попереднє повідомлення (якщо є) і шлемо нове.
+            if (isStream) {
+                if (message && message.message_id) {
+                    try {
+                        await bot.deleteMessage(userId, message.message_id);
+                    } catch (_) {
+                        // ignore delete errors
+                    }
+                }
+            } else if (message && message.message_id) {
                 try {
                     if (mediaType === 'video') {
                         await bot.editMessageMedia({
                             type: 'video',
-                            media: fileId,
+                            media: mediaSource,
                             caption: caption,
                             parse_mode: 'Markdown'
                         }, {
@@ -76,7 +117,7 @@ class MenuHandlers {
                     } else if (mediaType === 'animation') {
                         await bot.editMessageMedia({
                             type: 'animation',
-                            media: fileId,
+                            media: mediaSource,
                             caption: caption,
                             parse_mode: 'Markdown'
                         }, {
@@ -87,7 +128,7 @@ class MenuHandlers {
                     } else {
                         await bot.editMessageMedia({
                             type: 'photo',
-                            media: fileId,
+                            media: mediaSource,
                             caption: caption,
                             parse_mode: 'Markdown'
                         }, {
@@ -98,36 +139,37 @@ class MenuHandlers {
                     }
                     return;
                 } catch (error) {
-                    // Якщо не вдалося відредагувати, видаляємо старе і надсилаємо нове
+                    // Якщо не вдалося відредагувати, видаляємо старе і надішлемо нове нижче
                     if (error.response && error.response.body && error.response.body.description) {
                         const errorDesc = error.response.body.description;
                         if (errorDesc.includes("can't be edited") || errorDesc.includes("not modified")) {
                             try {
-                                // Видаляємо старе повідомлення
                                 await bot.deleteMessage(userId, message.message_id);
-                            } catch (deleteError) {
-                                // Ігноруємо помилки видалення
+                            } catch (_) {
+                                // ignore
                             }
                         }
                     }
                 }
             }
+
+            // Надсилаємо нове повідомлення
             if (mediaType === 'video') {
-                const sent = await bot.sendVideo(userId, fileId, {
+                const sent = await bot.sendVideo(userId, mediaSource, {
                     caption: caption,
                     ...keyboard,
                     parse_mode: 'Markdown'
                 });
                 this.userMessages.set(userId, sent.message_id);
             } else if (mediaType === 'animation') {
-                const sent = await bot.sendAnimation(userId, fileId, {
+                const sent = await bot.sendAnimation(userId, mediaSource, {
                     caption: caption,
                     ...keyboard,
                     parse_mode: 'Markdown'
                 });
                 this.userMessages.set(userId, sent.message_id);
             } else {
-                const sent = await bot.sendPhoto(userId, fileId, {
+                const sent = await bot.sendPhoto(userId, mediaSource, {
                     caption: caption,
                     ...keyboard,
                     parse_mode: 'Markdown'
@@ -212,15 +254,18 @@ class MenuHandlers {
             
             const prevMessage = this.userMessages.get(userId) ? { message_id: this.userMessages.get(userId) } : null;
             
-            if (item.video_id) {
-                await this.editOrSendMedia(bot, userId, prevMessage, 'video', item.video_id, text, keyboard);
-            } else if (item.photo_id) {
-                // Для гіфок використовуємо sendAnimation, для фото - sendPhoto
-                if (item.media_type === 'gif') {
-                    await this.editOrSendMedia(bot, userId, prevMessage, 'animation', item.photo_id, text, keyboard);
-                } else {
-                    await this.editOrSendMedia(bot, userId, prevMessage, 'photo', item.photo_id, text, keyboard);
-                }
+            const mediaPayload = this.getMediaPayload(item);
+
+            if (mediaPayload) {
+                await this.editOrSendMedia(
+                    bot,
+                    userId,
+                    prevMessage,
+                    mediaPayload.mediaType,
+                    mediaPayload.media,
+                    text,
+                    keyboard
+                );
             } else {
                 await this.editOrSendMessage(bot, userId, prevMessage, text, keyboard);
             }
@@ -259,15 +304,18 @@ class MenuHandlers {
         // Використовуємо message з попереднього повідомлення або збережене
         const prevMessage = message || (this.userMessages.get(userId) ? { message_id: this.userMessages.get(userId) } : null);
 
-        if (item.video_id) {
-            await this.editOrSendMedia(bot, userId, prevMessage, 'video', item.video_id, text, keyboard);
-        } else if (item.photo_id) {
-            // Для гіфок використовуємо sendAnimation, для фото - sendPhoto
-            if (item.media_type === 'gif') {
-                await this.editOrSendMedia(bot, userId, prevMessage, 'animation', item.photo_id, text, keyboard);
-            } else {
-                await this.editOrSendMedia(bot, userId, prevMessage, 'photo', item.photo_id, text, keyboard);
-            }
+        const mediaPayload = this.getMediaPayload(item);
+
+        if (mediaPayload) {
+            await this.editOrSendMedia(
+                bot,
+                userId,
+                prevMessage,
+                mediaPayload.mediaType,
+                mediaPayload.media,
+                text,
+                keyboard
+            );
         } else {
             await this.editOrSendMessage(bot, userId, prevMessage, text, keyboard);
         }

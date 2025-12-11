@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const cartService = require('../services/cartService');
 const orderService = require('../services/orderService');
 const Keyboards = require('../helpers/keyboards');
@@ -123,14 +125,18 @@ class CallbackHandlers {
         const messageId = this.menuHandlers.userMessages.get(userId);
         const message = messageId ? { message_id: messageId } : query.message;
         
-        if (item.video_id) {
-            await this.menuHandlers.editOrSendMedia(this.bot, userId, message, 'video', item.video_id, text, keyboard);
-        } else if (item.photo_id) {
-            if (item.media_type === 'gif') {
-                await this.menuHandlers.editOrSendMedia(this.bot, userId, message, 'animation', item.photo_id, text, keyboard);
-            } else {
-                await this.menuHandlers.editOrSendMedia(this.bot, userId, message, 'photo', item.photo_id, text, keyboard);
-            }
+        const mediaPayload = this.menuHandlers.getMediaPayload(item);
+
+        if (mediaPayload) {
+            await this.menuHandlers.editOrSendMedia(
+                this.bot,
+                userId,
+                message,
+                mediaPayload.mediaType,
+                mediaPayload.media,
+                text,
+                keyboard
+            );
         } else {
             await this.menuHandlers.editOrSendMessage(this.bot, userId, message, text, keyboard);
         }
@@ -397,13 +403,18 @@ class CallbackHandlers {
             }
             
             // Відправляємо гіфку з текстом підтвердження
-            // file_id отримано після завантаження mmm123123.gif через uploadGif.js
+            const localGifPath = path.join(__dirname, '..', 'src', 'giphy.gif');
             const confirmationGifId = process.env.ORDER_CONFIRMATION_GIF_ID || 
                 'CgACAgIAAxkDAAICoGkq7OzoQd4J9YJHO3sqYoGjYXqpAAIdjQAC2pJYSbm0X4NledjwNgQ';
-            
+
             try {
-                if (confirmationGifId) {
-                    // Відправляємо гіфку з текстом
+                if (fs.existsSync(localGifPath)) {
+                    const sent = await this.bot.sendAnimation(userId, fs.createReadStream(localGifPath), {
+                        caption: confirmationText,
+                        ...Keyboards.getMainMenu()
+                    });
+                    this.menuHandlers.userMessages.set(userId, sent.message_id);
+                } else if (confirmationGifId) {
                     const sent = await this.bot.sendAnimation(userId, confirmationGifId, {
                         caption: confirmationText,
                         ...Keyboards.getMainMenu()

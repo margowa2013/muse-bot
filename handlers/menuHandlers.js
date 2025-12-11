@@ -47,11 +47,16 @@ class MenuHandlers {
             const looksLocal = p.startsWith('/') || p.startsWith('\\') || p.includes('\\') || p.includes('/src/') || p.includes('/app/');
             if (looksLocal) {
                 const absPath = path.isAbsolute(p) ? p : path.join(process.cwd(), p);
+                // Try explicit path
                 if (fs.existsSync(absPath)) {
                     return { mediaType, media: fs.createReadStream(absPath), local: true, localPath: absPath, localPathCandidate: absPath };
                 }
-                // fall back to string if not found
-                return { mediaType, media: p, localPathCandidate: absPath };
+                // Try mapped local path as fallback
+                if (localPathCandidate && fs.existsSync(localPathCandidate)) {
+                    return { mediaType, media: fs.createReadStream(localPathCandidate), local: true, localPath: localPathCandidate, localPathCandidate };
+                }
+                // If file is missing locally, do not send a string path (Telegram will reject)
+                return null;
             }
             return { mediaType, media: p, localPathCandidate };
         }

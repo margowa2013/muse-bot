@@ -132,8 +132,8 @@ class CallbackHandlers {
                 this.bot,
                 userId,
                 message,
-                mediaPayload.mediaType,
-                mediaPayload.media,
+                item,
+                mediaPayload,
                 text,
                 keyboard
             );

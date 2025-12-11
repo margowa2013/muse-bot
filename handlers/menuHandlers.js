@@ -4,12 +4,14 @@ const cartService = require('../services/cartService');
 const Keyboards = require('../helpers/keyboards');
 const Messages = require('../helpers/messages');
 const { getLocalMediaPath } = require('../config/localMediaMap');
+const Item = require('../models/Item');
 
 class MenuHandlers {
     constructor(bot) {
         this.bot = bot;
         this.userStates = new Map(); // Зберігаємо стан користувача
         this.userMessages = new Map(); // Зберігаємо message_id для редагування
+        this.mediaCache = new Map(); // itemId -> { mediaType, fileId }
     }
 
     // Визначає, що і як відправляти (локальний файл, file_id або URL)
@@ -18,10 +20,15 @@ class MenuHandlers {
             ? 'video'
             : (item.media_type === 'gif' ? 'animation' : 'photo');
 
+        const cached = this.mediaCache.get(item._id.toString());
+        if (cached) {
+            return { mediaType: cached.mediaType, media: cached.fileId, cached: true };
+        }
+
         const localPath = getLocalMediaPath(item.title);
         if (localPath && fs.existsSync(localPath)) {
             // Використовуємо стрім, щоб Telegram отримав multipart із файлом
-            return { mediaType, media: fs.createReadStream(localPath) };
+            return { mediaType, media: fs.createReadStream(localPath), local: true };
         }
 
         if (item.video_id) {
@@ -88,94 +95,86 @@ class MenuHandlers {
     }
 
     // Допоміжний метод для редагування медіа
-    async editOrSendMedia(bot, userId, message, mediaType, mediaSource, caption, keyboard = null) {
-        const isStream = mediaSource && typeof mediaSource === 'object' && typeof mediaSource.path === 'string';
+    async editOrSendMedia(bot, userId, message, item, mediaPayload, caption, keyboard = null) {
+        const { mediaType, media, local, cached } = mediaPayload;
+        const canEdit = message && message.message_id && !local;
+
         try {
-            // Якщо локальний файл (stream) — Telegram не дозволяє editMessageMedia з ним.
-            // Тому видаляємо попереднє повідомлення (якщо є) і шлемо нове.
-            if (isStream) {
-                if (message && message.message_id) {
-                    try {
-                        await bot.deleteMessage(userId, message.message_id);
-                    } catch (_) {
-                        // ignore delete errors
-                    }
-                }
-            } else if (message && message.message_id) {
+            if (canEdit) {
                 try {
-                    if (mediaType === 'video') {
-                        await bot.editMessageMedia({
-                            type: 'video',
-                            media: mediaSource,
-                            caption: caption,
-                            parse_mode: 'Markdown'
-                        }, {
-                            chat_id: userId,
-                            message_id: message.message_id,
-                            ...keyboard
-                        });
-                    } else if (mediaType === 'animation') {
-                        await bot.editMessageMedia({
-                            type: 'animation',
-                            media: mediaSource,
-                            caption: caption,
-                            parse_mode: 'Markdown'
-                        }, {
-                            chat_id: userId,
-                            message_id: message.message_id,
-                            ...keyboard
-                        });
-                    } else {
-                        await bot.editMessageMedia({
-                            type: 'photo',
-                            media: mediaSource,
-                            caption: caption,
-                            parse_mode: 'Markdown'
-                        }, {
-                            chat_id: userId,
-                            message_id: message.message_id,
-                            ...keyboard
-                        });
-                    }
+                    await bot.editMessageMedia({
+                        type: mediaType === 'animation' ? 'animation' : mediaType,
+                        media,
+                        caption,
+                        parse_mode: 'Markdown'
+                    }, {
+                        chat_id: userId,
+                        message_id: message.message_id,
+                        ...keyboard
+                    });
                     return;
                 } catch (error) {
-                    // Якщо не вдалося відредагувати, видаляємо старе і надішлемо нове нижче
-                    if (error.response && error.response.body && error.response.body.description) {
-                        const errorDesc = error.response.body.description;
-                        if (errorDesc.includes("can't be edited") || errorDesc.includes("not modified")) {
-                            try {
-                                await bot.deleteMessage(userId, message.message_id);
-                            } catch (_) {
-                                // ignore
-                            }
-                        }
+                    // Якщо не вдалось відредагувати, видаляємо і шлемо нове
+                    try {
+                        await bot.deleteMessage(userId, message.message_id);
+                    } catch (_) {}
+                }
+            } else if (message && message.message_id && local) {
+                // Локальні файли не редагуються — видаляємо попереднє
+                try {
+                    await bot.deleteMessage(userId, message.message_id);
+                } catch (_) {}
+            }
+
+            let sent;
+            if (mediaType === 'video') {
+                sent = await bot.sendVideo(userId, media, {
+                    caption,
+                    ...keyboard,
+                    parse_mode: 'Markdown'
+                });
+            } else if (mediaType === 'animation') {
+                sent = await bot.sendAnimation(userId, media, {
+                    caption,
+                    ...keyboard,
+                    parse_mode: 'Markdown'
+                });
+            } else {
+                sent = await bot.sendPhoto(userId, media, {
+                    caption,
+                    ...keyboard,
+                    parse_mode: 'Markdown'
+                });
+            }
+
+            // Кешуємо file_id для подальшого редагування
+            if (local || !cached) {
+                let fileId = null;
+                if (sent.video) fileId = sent.video.file_id;
+                else if (sent.animation) fileId = sent.animation.file_id;
+                else if (sent.photo && sent.photo.length) fileId = sent.photo[sent.photo.length - 1].file_id;
+
+                if (fileId) {
+                    const mediaTypeToStore = mediaType === 'animation' ? 'animation' : mediaType;
+                    this.mediaCache.set(item._id.toString(), { mediaType: mediaTypeToStore, fileId });
+
+                    const update = {};
+                    if (mediaType === 'video') {
+                        update.video_id = fileId;
+                        update.media_type = 'video';
+                    } else {
+                        update.photo_id = fileId;
+                        update.media_type = mediaType === 'animation' ? 'gif' : 'photo';
+                    }
+                    try {
+                        await Item.updateOne({ _id: item._id }, { $set: update });
+                    } catch (e) {
+                        console.error('Failed to persist media file_id:', e.message);
                     }
                 }
             }
 
-            // Надсилаємо нове повідомлення
-            if (mediaType === 'video') {
-                const sent = await bot.sendVideo(userId, mediaSource, {
-                    caption: caption,
-                    ...keyboard,
-                    parse_mode: 'Markdown'
-                });
-                this.userMessages.set(userId, sent.message_id);
-            } else if (mediaType === 'animation') {
-                const sent = await bot.sendAnimation(userId, mediaSource, {
-                    caption: caption,
-                    ...keyboard,
-                    parse_mode: 'Markdown'
-                });
-                this.userMessages.set(userId, sent.message_id);
-            } else {
-                const sent = await bot.sendPhoto(userId, mediaSource, {
-                    caption: caption,
-                    ...keyboard,
-                    parse_mode: 'Markdown'
-                });
-                this.userMessages.set(userId, sent.message_id);
-            }
+            this.userMessages.set(userId, sent.message_id);
         } catch (error) {
             console.error('Error in editOrSendMedia:', error);
         }
@@ -261,8 +260,8 @@ class MenuHandlers {
                     bot,
                     userId,
                     prevMessage,
-                    mediaPayload.mediaType,
-                    mediaPayload.media,
+                    item,
+                    mediaPayload,
                     text,
                     keyboard
                 );
@@ -311,8 +310,8 @@ class MenuHandlers {
                 bot,
                 userId,
                 prevMessage,
-                mediaPayload.mediaType,
-                mediaPayload.media,
+                item,
+                mediaPayload,
                 text,
                 keyboard
             );

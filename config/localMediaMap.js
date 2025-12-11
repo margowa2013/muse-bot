@@ -3,6 +3,17 @@ const path = require('path');
 // Root folder where local media is stored
 const MEDIA_ROOT = path.join(__dirname, '..', 'src');
 
+function normalizeTitle(str) {
+    if (!str) return '';
+    return str
+        .toLowerCase()
+        // заміна різних тире/апострофів/кавычек/крапок на пробіл
+        .replace(/[_–—\-’'`"«».,;:!?()[\]{}]/g, ' ')
+        // прибираємо подвоєні пробіли
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 // Map item titles to local file names.
 // Duplicate keys without emojis ensure backward compatibility with older titles.
 const LOCAL_MEDIA = {
@@ -16,11 +27,13 @@ const LOCAL_MEDIA = {
     'Сніданок з беконом': 'photo_2025-12-11_11-25-36.jpg',
     'От би твою гранолу з йогуртом і спокоєм': 'photo_2025-12-11_11-26-02.jpg',
     'Блинчик — і тебе в нього загорнути': 'photo_2025-12-11_11-26-27.jpg',
+    'Блинчик і тебе в нього загорнути': 'photo_2025-12-11_11-26-27.jpg', // без тире
     'Пюре з курочкою': 'photo_2025-12-11_11-26-38.jpg',
     'Курочка, овочі й трохи любові': 'photo_2025-12-11_11-27-02.jpg',
     'Сегодня в меню красная рыбка': 'kras.jpg',
     'Гречка й курочка': 'gre.jpg',
     'Пасту — з любов\'ю, як завжди': 'pasta.jpg',
+    'Пасту з любов\'ю, як завжди': 'pasta.jpg', // без тире
     'Ложку риса… или две': 'risss.jpg',
     'Очень захотелось горячих бутербродов': 'hotbut.jpg',
     'А может закажем суши??': 'sush.jpg',
@@ -54,9 +67,22 @@ const LOCAL_MEDIA = {
 };
 
 function getLocalMediaPath(title) {
-    const fileName = LOCAL_MEDIA[title];
-    if (!fileName) return null;
-    return path.join(MEDIA_ROOT, fileName);
+    if (!title) return null;
+
+    // 1) точний збіг
+    const exact = LOCAL_MEDIA[title];
+    if (exact) {
+        return path.join(MEDIA_ROOT, exact);
+    }
+
+    // 2) нормалізований збіг
+    const normalizedTitle = normalizeTitle(title);
+    const entry = Object.entries(LOCAL_MEDIA).find(([key]) => normalizeTitle(key) === normalizedTitle);
+    if (entry) {
+        return path.join(MEDIA_ROOT, entry[1]);
+    }
+
+    return null;
 }
 
 module.exports = { getLocalMediaPath };

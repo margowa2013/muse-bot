@@ -98,6 +98,29 @@ class MenuHandlers {
     async editOrSendMedia(bot, userId, message, item, mediaPayload, caption, keyboard = null) {
         const { mediaType, media, local, cached, localPath } = mediaPayload;
         const canEdit = message && message.message_id && !local;
+        const fallbackLocalPath = getLocalMediaPath(item.title);
+
+        const trySend = async (source) => {
+            if (mediaType === 'video') {
+                return bot.sendVideo(userId, source, {
+                    caption,
+                    ...keyboard,
+                    parse_mode: 'Markdown'
+                });
+            }
+            if (mediaType === 'animation') {
+                return bot.sendAnimation(userId, source, {
+                    caption,
+                    ...keyboard,
+                    parse_mode: 'Markdown'
+                });
+            }
+            return bot.sendPhoto(userId, source, {
+                caption,
+                ...keyboard,
+                parse_mode: 'Markdown'
+            });
+        };
 
         try {
             if (canEdit) {
@@ -114,72 +137,60 @@ class MenuHandlers {
                     });
                     return;
                 } catch (error) {
-                    // Якщо не вдалось відредагувати, видаляємо і шлемо нове
-                    try {
-                        await bot.deleteMessage(userId, message.message_id);
-                    } catch (_) {}
+                    const desc = error?.response?.body?.description || '';
+                    const badFile = desc.includes('wrong file identifier') || desc.includes('FILE_REFERENCE_');
+                    // Якщо file_id протух або неправильний — пробуємо відправити файл заново
+                    if (!badFile) {
+                        try { await bot.deleteMessage(userId, message.message_id); } catch (_) {}
+                    }
                 }
             } else if (message && message.message_id && local) {
-                // Локальні файли не редагуються — видаляємо попереднє
-                try {
-                    await bot.deleteMessage(userId, message.message_id);
-                } catch (_) {}
+                try { await bot.deleteMessage(userId, message.message_id); } catch (_) {}
             }
 
-            let sent;
-            if (mediaType === 'video') {
-                sent = await bot.sendVideo(userId, media, {
-                    caption,
-                    ...keyboard,
-                    parse_mode: 'Markdown'
-                });
-            } else if (mediaType === 'animation') {
-                sent = await bot.sendAnimation(userId, media, {
-                    caption,
-                    ...keyboard,
-                    parse_mode: 'Markdown'
-                });
-            } else {
-                sent = await bot.sendPhoto(userId, media, {
-                    caption,
-                    ...keyboard,
-                    parse_mode: 'Markdown'
-                });
+            // Вибираємо джерело для повторної відправки
+            let source = media;
+            let usedLocalPath = localPath;
+            if (fallbackLocalPath && fs.existsSync(fallbackLocalPath)) {
+                source = fs.createReadStream(fallbackLocalPath);
+                usedLocalPath = fallbackLocalPath;
             }
+
+            const sent = await trySend(source);
 
             // Кешуємо file_id для подальшого редагування
-            if (local || !cached) {
-                let fileId = null;
-                if (sent.video) fileId = sent.video.file_id;
-                else if (sent.animation) fileId = sent.animation.file_id;
-                else if (sent.photo && sent.photo.length) fileId = sent.photo[sent.photo.length - 1].file_id;
+            let fileId = null;
+            if (sent.video) fileId = sent.video.file_id;
+            else if (sent.animation) fileId = sent.animation.file_id;
+            else if (sent.photo && sent.photo.length) fileId = sent.photo[sent.photo.length - 1].file_id;
 
-                if (fileId) {
-                    const mediaTypeToStore = mediaType === 'animation' ? 'animation' : mediaType;
-                    this.mediaCache.set(item._id.toString(), { mediaType: mediaTypeToStore, fileId });
+            if (fileId) {
+                const mediaTypeToStore = mediaType === 'animation' ? 'animation' : mediaType;
+                this.mediaCache.set(item._id.toString(), { mediaType: mediaTypeToStore, fileId });
 
-                    const update = {};
-                    if (mediaType === 'video') {
-                        update.video_id = fileId;
-                        update.media_type = 'video';
-                    } else {
-                        update.photo_id = fileId;
-                        update.media_type = mediaType === 'animation' ? 'gif' : 'photo';
-                        if (localPath) {
-                            update.photo_url = localPath; // зберігаємо відносний шлях до локального файлу
-                        }
+                const update = {};
+                if (mediaType === 'video') {
+                    update.video_id = fileId;
+                    update.media_type = 'video';
+                } else {
+                    update.photo_id = fileId;
+                    update.media_type = mediaType === 'animation' ? 'gif' : 'photo';
+                    if (usedLocalPath) {
+                        update.photo_url = usedLocalPath;
                     }
-                    try {
-                        await Item.updateOne({ _id: item._id }, { $set: update });
-                    } catch (e) {
-                        console.error('Failed to persist media file_id:', e.message);
-                    }
+                }
+                try {
+                    await Item.updateOne({ _id: item._id }, { $set: update });
+                } catch (e) {
+                    console.error('Failed to persist media file_id:', e.message);
                 }
             }
 
             this.userMessages.set(userId, sent.message_id);
         } catch (error) {
             console.error('Error in editOrSendMedia:', error);
+            // Якщо все впало, очищаємо кеш для цього айтема
+            this.mediaCache.delete(item._id.toString());
         }
     }
 

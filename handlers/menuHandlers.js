@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const menuService = require('../services/menuService');
 const cartService = require('../services/cartService');
 const Keyboards = require('../helpers/keyboards');
@@ -33,16 +34,26 @@ class MenuHandlers {
         }
 
         if (item.video_id) {
-            return { mediaType: 'video', media: item.video_id };
+            return { mediaType: 'video', media: item.video_id, localPathCandidate };
         }
 
         if (item.photo_id) {
             const type = item.media_type === 'gif' ? 'animation' : 'photo';
-            return { mediaType: type, media: item.photo_id };
+            return { mediaType: type, media: item.photo_id, localPathCandidate };
         }
 
         if (item.photo_url) {
-            return { mediaType, media: item.photo_url };
+            const p = item.photo_url;
+            const looksLocal = p.startsWith('/') || p.startsWith('\\') || p.includes('\\') || p.includes('/src/') || p.includes('/app/');
+            if (looksLocal) {
+                const absPath = path.isAbsolute(p) ? p : path.join(process.cwd(), p);
+                if (fs.existsSync(absPath)) {
+                    return { mediaType, media: fs.createReadStream(absPath), local: true, localPath: absPath, localPathCandidate: absPath };
+                }
+                // fall back to string if not found
+                return { mediaType, media: p, localPathCandidate: absPath };
+            }
+            return { mediaType, media: p, localPathCandidate };
         }
 
         return null;
@@ -427,5 +438,3 @@ class MenuHandlers {
 }
 
 module.exports = MenuHandlers;
-
-

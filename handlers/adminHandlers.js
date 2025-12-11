@@ -678,7 +678,7 @@ class AdminHandlers {
             }
         };
 
-        await this.editOrSendMessage(bot, userId, message, text, keyboard);
+        await this.editOrSendMessage(bot, userId, message, text, keyboard, false);
     }
 
     async showOrderDetails(bot, userId, orderId, message = null) {
@@ -728,7 +728,7 @@ class AdminHandlers {
             }
         };
 
-        await this.editOrSendMessage(bot, userId, message, text, keyboard);
+        await this.editOrSendMessage(bot, userId, message, text, keyboard, false);
     }
 
     async startPayDebt(bot, userId, message = null) {

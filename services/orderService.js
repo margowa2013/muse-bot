@@ -107,6 +107,29 @@ class OrderService {
         return { success: true, orderId: order._id };
     }
 
+    /**
+     * Створення замовлення без кошика (для спецменю)
+     */
+    async createSpecialOrder(userId, dateRequested, comment, itemTitle = 'Спецменю (активне)') {
+        const parsedDate = dateRequested ? this.parseDate(dateRequested) : null;
+
+        const order = await Order.create({
+            user_id: userId,
+            date_requested: parsedDate,
+            comment: comment,
+            status: 'pending',
+            items: [{
+                item_id: null,
+                custom_text: null,
+                title: itemTitle,
+                price_amount: 0,
+                currency_id: null
+            }]
+        });
+
+        return { success: true, orderId: order._id };
+    }
+
     async getOrders(userId) {
         const orders = await Order.find({ user_id: userId })
             .sort({ createdAt: -1 });

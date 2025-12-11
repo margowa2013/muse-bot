@@ -66,17 +66,21 @@ class AdminService {
     }
 
     async getAllOrders() {
-        const orders = await Order.find()
-            .populate('user_id', 'first_name username')
-            .sort({ createdAt: -1 });
-        
+        const orders = await Order.find().sort({ createdAt: -1 });
+
+        const userIds = Array.from(new Set(orders.map(o => o.user_id).filter(Boolean)));
+        const users = await User.find({ user_id: { $in: userIds } })
+            .select('user_id first_name username')
+            .lean();
+        const usersMap = new Map(users.map(u => [u.user_id, u]));
+
         return orders.map(order => {
-            const user = order.user_id;
+            const user = usersMap.get(order.user_id);
             return {
                 id: order._id,
-                user_id: typeof user === 'object' ? user.user_id : order.user_id,
-                first_name: typeof user === 'object' ? user.first_name : null,
-                username: typeof user === 'object' ? user.username : null,
+                user_id: order.user_id,
+                first_name: user ? user.first_name : null,
+                username: user ? user.username : null,
                 date_requested: order.date_requested,
                 comment: order.comment,
                 status: order.status,

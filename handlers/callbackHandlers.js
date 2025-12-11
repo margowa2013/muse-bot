@@ -671,12 +671,22 @@ class CallbackHandlers {
         const user = await User.findOne({ user_id: userId });
         const username = user ? (user.username ? `@${user.username}` : `ID: ${userId}`) : `ID: ${userId}`;
         
-        // Адмін-нотифікація у форматі звичайного замовлення (plain text)
+        // Парсимо дату з коментаря (простий пошук dd.mm.yyyy)
         const dateMatch = comment && comment.match(/\d{1,2}\.\d{1,2}\.\d{4}/);
-        const dateText = dateMatch ? dateMatch[0] : 'Не вказано';
+        const dateText = dateMatch ? dateMatch[0] : null;
+        const parsedDate = dateText ? require('../services/orderService').parseDate(dateText) : null;
+
+        // Створюємо замовлення в БД (спецменю)
+        try {
+            await orderService.createSpecialOrder(userId, parsedDate, comment, 'Спецменю (активне)');
+        } catch (err) {
+            console.error('❌ Помилка створення спецзамовлення:', err);
+        }
+
+        // Адмін-нотифікація у форматі звичайного замовлення (plain text)
         const adminMessage = `📸 Нове замовлення зі спецменю\n\n` +
             `👤 Користувач: ${username}\n` +
-            `📅 Дата: ${dateText}\n` +
+            `📅 Дата: ${dateText || 'Не вказано'}\n` +
             `💬 Коментар: ${comment || '(без коментаря)'}\n` +
             `🧺 Позиції:\n1. Спецменю (активне)`;
         
